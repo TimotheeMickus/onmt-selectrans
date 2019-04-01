@@ -41,7 +41,8 @@ class NMTModel(nn.Module):
 
         enc_state, memory_bank, lengths = self.encoder(src, lengths)
         if bptt is False:
-            self.decoder.init_state(src, memory_bank, enc_state)
+            src_ = self.encoder.clean_src(src)
+            self.decoder.init_state(src_, memory_bank, enc_state)
         dec_out, attns = self.decoder(tgt, memory_bank,
                                       memory_lengths=lengths)
         return dec_out, attns

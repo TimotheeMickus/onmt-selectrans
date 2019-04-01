@@ -40,6 +40,13 @@ class EncoderBase(nn.Module):
             n_batch_, = lengths.size()
             aeq(n_batch, n_batch_)
 
+    def clean_src(self, src):
+        """
+        Quickfix for selectrans: reshape source if necessary.
+        As a default, don't.
+        """
+        return src
+
     def forward(self, src, lengths=None):
         """
         Args:
