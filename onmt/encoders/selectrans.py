@@ -50,7 +50,7 @@ class SelecTransEncoder(TransformerEncoder):
         emb, out, lengths = super(SelecTransEncoder, self).forward( \
             true_input.unsqueeze(-1), lengths)
 
-        # Whcih output is to be discared
+        # Which output is to be discared
         selector_mask = (select_labels == self._select_idx).unsqueeze(-1)
 
         # Recomputing output lengths
