@@ -45,7 +45,6 @@ class SelecTransEncoder(TransformerEncoder):
 
         # Unpack input and features
         true_input, select_labels = torch.unbind(src, dim=-1)
-
         # Call the transformer
         emb, out, lengths = super(SelecTransEncoder, self).forward( \
             true_input.unsqueeze(-1), lengths)
@@ -54,12 +53,12 @@ class SelecTransEncoder(TransformerEncoder):
         selector_mask = (select_labels == self._select_idx).unsqueeze(-1)
 
         # Recomputing output lengths
-        memory_lengths = torch.ones(src.size(1), dtype=torch.long)
+        memory_lengths = torch.ones(src.size(1), dtype=torch.long).to(lengths.device)
 
         # TODO: support multiple items selection
         # [1 x B x F]
         select_out = torch.masked_select(out, selector_mask).view(1, \
-            src.size(1), out.size(-1))
+            src.size(1), out.size(-1)).to(out.device)
 
         # embeddings are ignored for transformers, so no need to rebatch them
         return emb, select_out, memory_lengths
