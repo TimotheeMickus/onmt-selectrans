@@ -67,6 +67,9 @@ def model_opts(parser):
     group.add('--model_dtype', '-model_dtype', default='fp32',
               choices=['fp32', 'fp16'],
               help='Data type of the model.')
+    group.add('--mask_self_reference', '-mask_self_reference',
+              action="store_true",
+              help="Mask self-reference in output")
 
     group.add('--encoder_type', '-encoder_type', type=str, default='rnn',
               choices=['rnn', 'brnn', 'mean', 'transformer', 'selectrans', 'cnn'],
@@ -179,6 +182,7 @@ def model_opts(parser):
     group.add('--loss_scale', '-loss_scale', type=float, default=0,
               help="For FP16 training, the static loss scale to use. If not "
                    "set, the loss scale is dynamically computed.")
+
 
 
 def preprocess_opts(parser):

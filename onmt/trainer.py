@@ -15,6 +15,7 @@ import torch
 
 import onmt.utils
 from onmt.utils.logging import logger
+from onmt.utils.misc import make_self_ref_mask
 
 
 def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
@@ -61,7 +62,8 @@ def build_trainer(opt, device_id, model, fields, optim, model_saver=None):
                            model_saver=model_saver if gpu_rank == 0 else None,
                            average_decay=average_decay,
                            average_every=average_every,
-                           model_dtype=opt.model_dtype)
+                           model_dtype=opt.model_dtype,
+                           mask_sr=opt.mask_self_reference)
     return trainer
 
 
@@ -97,7 +99,8 @@ class Trainer(object):
                  accum_steps=[0],
                  n_gpu=1, gpu_rank=1,
                  gpu_verbose_level=0, report_manager=None, model_saver=None,
-                 average_decay=0, average_every=1, model_dtype='fp32'):
+                 average_decay=0, average_every=1, model_dtype='fp32',
+                 mask_sr=False):
         # Basic attributes.
         self.model = model
         self.train_loss = train_loss
@@ -118,6 +121,7 @@ class Trainer(object):
         self.moving_average = None
         self.average_every = average_every
         self.model_dtype = model_dtype
+        self.mask_sr = mask_sr
 
         for i in range(len(self.accum_count_l)):
             assert self.accum_count_l[i] > 0
@@ -290,7 +294,14 @@ class Trainer(object):
                 outputs, attns = valid_model(src, tgt, src_lengths)
 
                 # Compute loss.
-                _, batch_stats = self.valid_loss(batch, outputs, attns)
+                if self.mask_sr:
+                    sr_mask = make_self_ref_mask(
+                        self.train_loss.generator.sr_dict,
+                        src)
+                else:
+                    sr_mask = None
+                _, batch_stats = self.valid_loss(batch, outputs, attns,
+                    sr_mask=sr_mask)
 
                 # Update statistics.
                 stats.update(batch_stats)
@@ -335,6 +346,13 @@ class Trainer(object):
                 bptt = True
 
                 # 3. Compute loss.
+                #3. a mask self ref if necessary
+                if self.mask_sr:
+                    sr_mask = make_self_ref_mask(
+                        self.train_loss.generator.sr_dict,
+                        src)
+                else:
+                    sr_mask = None
                 loss, batch_stats = self.train_loss(
                     batch,
                     outputs,
@@ -342,8 +360,8 @@ class Trainer(object):
                     normalization=normalization,
                     shard_size=self.shard_size,
                     trunc_start=j,
-                    trunc_size=trunc_size)
-
+                    trunc_size=trunc_size,
+                    sr_mask=sr_mask)
                 if loss is not None:
                     self.optim.backward(loss)
 

@@ -5,6 +5,8 @@ import random
 import inspect
 from itertools import islice
 
+from nltk.corpus import wordnet as wn
+
 
 def split_corpus(path, shard_size):
     with open(path, "rb") as f:
@@ -124,3 +126,23 @@ def relative_matmul(x, z, transpose):
 def fn_args(fun):
     """Returns the list of function arguments name."""
     return inspect.getfullargspec(fun).args
+
+
+def make_self_ref_mask_dict(src_field, tgt_field):
+    mask_len = len(tgt_field.vocab)
+    self_ref_mask_dict = {}
+    for i,s in enumerate(src_field.vocab.itos):
+        self_ref_mask_dict[i] = torch.zeros(mask_len).byte()
+        if s in tgt_field.vocab.stoi :
+            self_ref_mask_dict[i][tgt_field.vocab.stoi[s]] = 1
+        #if wn.morphy(s) in tgt_field.vocab.stoi:
+        #    self_ref_mask_dict[i][tgt_field.vocab.stoi[wn.morphy(s)]] = 1
+    return self_ref_mask_dict
+
+
+def make_self_ref_mask(self_ref_mask_dict, input):
+    mask = torch.stack([
+        self_ref_mask_dict[src_i.item()].cuda()
+        for src_i in input.view(-1)])
+    mask.requires_grad = False
+    return mask.unsqueeze(0)

@@ -5,6 +5,7 @@ and creates each encoder and decoder accordingly.
 import re
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.init import xavier_uniform_
 
 import onmt.inputters as inputters
@@ -15,8 +16,9 @@ from onmt.decoders import str2dec
 
 from onmt.modules import Embeddings, CopyGenerator
 from onmt.modules.util_class import Cast
-from onmt.utils.misc import use_gpu
+from onmt.utils.misc import use_gpu, make_self_ref_mask_dict
 from onmt.utils.logging import logger
+from onmt.utils.loss import SelfRefMaskGenerator
 from onmt.utils.parse import ArgumentParser
 
 
@@ -29,7 +31,7 @@ def build_embeddings(opt, text_field, for_encoder=True):
     """
     emb_dim = opt.src_word_vec_size if for_encoder else opt.tgt_word_vec_size
 
-    # don't embed the selection index 
+    # don't embed the selection index
     if opt.encoder_type == "selectrans" and for_encoder :
         text_field_ = text_field[:-1]
     else :
@@ -141,6 +143,9 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
     # Build decoder.
     tgt_field = fields["tgt"]
     tgt_emb = build_embeddings(model_opt, tgt_field, for_encoder=False)
+    if model_opt.mask_self_reference:
+        self_ref_mask_dict = make_self_ref_mask_dict(src_field.base_field,
+                tgt_field.base_field)
 
     # Share the embedding matrix - preprocess with share_vocab required.
     if model_opt.share_embeddings:
@@ -167,12 +172,18 @@ def build_base_model(model_opt, fields, gpu, checkpoint=None, gpu_id=None):
             gen_func = onmt.modules.sparse_activations.LogSparsemax(dim=-1)
         else:
             gen_func = nn.LogSoftmax(dim=-1)
-        generator = nn.Sequential(
-            nn.Linear(model_opt.dec_rnn_size,
-                      len(fields["tgt"].base_field.vocab)),
-            Cast(torch.float32),
-            gen_func
-        )
+        if model_opt.mask_self_reference:
+            generator = SelfRefMaskGenerator(self_ref_mask_dict,
+                    nn.Linear(model_opt.dec_rnn_size,
+                              len(fields["tgt"].base_field.vocab)),
+                    gen_func)
+        else:
+            generator = nn.Sequential(
+                nn.Linear(model_opt.dec_rnn_size,
+                          len(fields["tgt"].base_field.vocab)),
+                Cast(torch.float32),
+                gen_func
+            )
         if model_opt.share_decoder_embeddings:
             generator[0].weight = decoder.embeddings.word_lut.weight
     else:

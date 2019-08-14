@@ -10,7 +10,7 @@ import torch.nn.functional as F
 import onmt
 from onmt.modules.sparse_losses import SparsemaxLoss
 from onmt.modules.sparse_activations import LogSparsemax
-
+from onmt.modules.util_class import Cast
 
 def build_loss_compute(model, tgt_field, opt, train=True):
     """
@@ -98,7 +98,7 @@ class LossComputeBase(nn.Module):
         """
         return NotImplementedError
 
-    def _compute_loss(self, batch, output, target, **kwargs):
+    def _compute_loss(self, batch, output, target, sr_mask=None, **kwargs):
         """
         Compute the loss. Subclass must define this method.
 
@@ -118,7 +118,8 @@ class LossComputeBase(nn.Module):
                  normalization=1.0,
                  shard_size=0,
                  trunc_start=0,
-                 trunc_size=None):
+                 trunc_size=None,
+                 sr_mask=None):
         """Compute the forward loss, possibly in shards in which case this
         method also runs the backward pass and returns ``None`` as the loss
         value.
@@ -151,11 +152,11 @@ class LossComputeBase(nn.Module):
         trunc_range = (trunc_start, trunc_start + trunc_size)
         shard_state = self._make_shard_state(batch, output, trunc_range, attns)
         if shard_size == 0:
-            loss, stats = self._compute_loss(batch, **shard_state)
+            loss, stats = self._compute_loss(batch, sr_mask=sr_mask, **shard_state)
             return loss / float(normalization), stats
         batch_stats = onmt.utils.Statistics()
         for shard in shards(shard_state, shard_size):
-            loss, stats = self._compute_loss(batch, **shard)
+            loss, stats = self._compute_loss(batch, sr_mask=sr_mask, **shard)
             loss.div(float(normalization)).backward()
             batch_stats.update(stats)
         return None, batch_stats
@@ -193,24 +194,72 @@ class LabelSmoothingLoss(nn.Module):
         assert 0.0 < label_smoothing <= 1.0
         self.ignore_index = ignore_index
         super(LabelSmoothingLoss, self).__init__()
-
+        self.label_smoothing = label_smoothing
         smoothing_value = label_smoothing / (tgt_vocab_size - 2)
         one_hot = torch.full((tgt_vocab_size,), smoothing_value)
         one_hot[self.ignore_index] = 0
         self.register_buffer('one_hot', one_hot.unsqueeze(0))
-
         self.confidence = 1.0 - label_smoothing
 
-    def forward(self, output, target):
+    def forward(self, output, target, sr_mask=None):
         """
         output (FloatTensor): batch_size x n_classes
         target (LongTensor): batch_size
+        sr_mask (ByteTensor): src_ipt_size x src_batch_size x n_classes
         """
-        model_prob = self.one_hot.repeat(target.size(0), 1)
+        if sr_mask is not None:
+            mb = output.view(-1, sr_mask.size(1), output.size(1)).size(0)
+            smooth = (
+                self.label_smoothing /
+                (output.size(-1) - (2+sr_mask.squeeze(0).sum(dim=-1).float()))
+            ).unsqueeze(1)
+            model_prob = (~sr_mask).squeeze(0).float() * smooth
+            model_prob[:self.ignore_index] = 0
+            model_prob = model_prob.expand(mb, *model_prob.size()).contiguous().view(-1, output.size(1))
+        else:
+            model_prob = self.one_hot.repeat(target.size(0), 1)
         model_prob.scatter_(1, target.unsqueeze(1), self.confidence)
         model_prob.masked_fill_((target == self.ignore_index).unsqueeze(1), 0)
 
         return F.kl_div(output, model_prob, reduction='sum')
+
+
+class SelfRefMaskGenerator(nn.Module):
+    """
+        Hack generator to mask self reference
+    """
+    def __init__(self, self_ref_mask_dict, proj, gen_func):
+        super(SelfRefMaskGenerator, self).__init__()
+        self.sr_dict = self_ref_mask_dict
+        self.proj = proj
+        self.cast = Cast(torch.float32)
+        self.gen_func = gen_func
+
+    def forward(self, output, sr_mask=None):
+        """
+            Apply mask between proj & gen func
+        """
+        output = self.proj(output)
+        if sr_mask is not None:
+            output_size = output.size()
+            output = output.view(-1, sr_mask.size(-2), sr_mask.size(-1))
+            output.masked_fill_(sr_mask, -1e18)
+            output = output.view(*output_size)
+        output = self.cast(output)
+        output = self.gen_func(output)
+        return output
+
+    def __getitem__(self, index):
+        """
+            Compatibility with nn.Sequential index handling
+        """
+        if index == 0  or index == -3:
+            return self.proj
+        if index == 1 or index == -1:
+            return self.cast
+        if index == 2 or index == -1:
+            return self.gen_func
+        raise IndexError
 
 
 class NMTLossCompute(LossComputeBase):
@@ -227,13 +276,19 @@ class NMTLossCompute(LossComputeBase):
             "target": batch.tgt[range_[0] + 1: range_[1], :, 0],
         }
 
-    def _compute_loss(self, batch, output, target):
+    def _compute_loss(self, batch, output, target, sr_mask=None):
         bottled_output = self._bottle(output)
 
-        scores = self.generator(bottled_output)
+        if isinstance(self.generator, SelfRefMaskGenerator)
+            scores = self.generator(bottled_output, sr_mask=sr_mask)
+        else:
+            scores = self.generator(bottled_output)
         gtruth = target.view(-1)
-
-        loss = self.criterion(scores, gtruth)
+        if isinstance(self.criterion, LabelSmoothingLoss):
+            # potential propagation of masking in smoothed distribution
+            loss = self.criterion(scores, gtruth, sr_mask=sr_mask)
+        else:
+            loss = self.criterion(scores, gtruth)
         stats = self._stats(loss.clone(), scores, gtruth)
 
         return loss, stats
