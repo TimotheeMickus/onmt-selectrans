@@ -279,7 +279,7 @@ class NMTLossCompute(LossComputeBase):
     def _compute_loss(self, batch, output, target, sr_mask=None):
         bottled_output = self._bottle(output)
 
-        if isinstance(self.generator, SelfRefMaskGenerator)
+        if isinstance(self.generator, SelfRefMaskGenerator):
             scores = self.generator(bottled_output, sr_mask=sr_mask)
         else:
             scores = self.generator(bottled_output)
