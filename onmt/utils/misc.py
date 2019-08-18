@@ -140,6 +140,13 @@ def make_self_ref_mask_dict(src_field, tgt_field):
     return self_ref_mask_dict
 
 
+def get_definienda_from_src(src, select_idx):
+    true_input, select_labels = torch.unbind(src, dim=-1)
+    selector_mask = (select_labels == select_idx)
+    select_src = torch.masked_select(true_input, selector_mask)
+    # one element, batched, one feature -> [1 x B x 1]
+    return select_src.view(1, src.size(1), 1)
+
 def make_self_ref_mask(self_ref_mask_dict, input):
     mask = torch.stack([
         self_ref_mask_dict[src_i.item()].cuda()

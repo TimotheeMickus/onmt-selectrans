@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from onmt.inputters.inputter import load_old_vocab, old_style_vocab
 from onmt.encoders.transformer import TransformerEncoder
+from onmt.utils.misc import get_definienda_from_src
 
 SLCT_label = "SLCT"
 
@@ -65,8 +66,4 @@ class SelecTransEncoder(TransformerEncoder):
 
     def clean_src(self, src):
         # TODO: remove that fix...
-        true_input, select_labels = torch.unbind(src, dim=-1)
-        selector_mask = (select_labels == self._select_idx)
-        select_src = torch.masked_select(true_input, selector_mask)
-        # one element, batched, one feature -> [1 x B x 1]
-        return select_src.view(1, src.size(1), 1)
+        return get_definienda_from_src(src, self._select_idx)

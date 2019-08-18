@@ -205,22 +205,25 @@ class LabelSmoothingLoss(nn.Module):
         """
         output (FloatTensor): batch_size x n_classes
         target (LongTensor): batch_size
-        sr_mask (ByteTensor): src_ipt_size x src_batch_size x n_classes
+        sr_mask (ByteTensor): 1 x src_batch_size x n_classes
         """
         if sr_mask is not None:
-            mb = output.view(-1, sr_mask.size(1), output.size(1)).size(0)
+            mb = output.size(0) // sr_mask.size(1)
             smooth = (
                 self.label_smoothing /
                 (output.size(-1) - (2+sr_mask.squeeze(0).sum(dim=-1).float()))
             ).unsqueeze(1)
             model_prob = (~sr_mask).squeeze(0).float() * smooth
-            model_prob[:self.ignore_index] = 0
+            model_prob[:,self.ignore_index] = 0
             model_prob = model_prob.expand(mb, *model_prob.size()).contiguous().view(-1, output.size(1))
         else:
             model_prob = self.one_hot.repeat(target.size(0), 1)
         model_prob.scatter_(1, target.unsqueeze(1), self.confidence)
         model_prob.masked_fill_((target == self.ignore_index).unsqueeze(1), 0)
-
+        if sr_mask is not None:
+            mb = output.size(0) // sr_mask.size(1)
+            sr_mask = sr_mask.expand(mb, *sr_mask.size()).contiguous().view(-1, output.size(1))
+            model_prob.masked_fill_(sr_mask, 0)
         return F.kl_div(output, model_prob, reduction='sum')
 
 
