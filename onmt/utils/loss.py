@@ -222,7 +222,7 @@ class LabelSmoothingLoss(nn.Module):
         model_prob.masked_fill_((target == self.ignore_index).unsqueeze(1), 0)
         if sr_mask is not None:
             mb = output.size(0) // sr_mask.size(1)
-            sr_mask = sr_mask.expand(mb, *sr_mask.size()).contiguous().view(-1, output.size(1))
+            sr_mask = sr_mask.expand(mb, *sr_mask.squeeze(0).size()).contiguous().view(-1, output.size(1))
             model_prob.masked_fill_(sr_mask, 0)
         return F.kl_div(output, model_prob, reduction='sum')
 
@@ -291,7 +291,13 @@ class NMTLossCompute(LossComputeBase):
             # potential propagation of masking in smoothed distribution
             loss = self.criterion(scores, gtruth, sr_mask=sr_mask)
         else:
-            loss = self.criterion(scores, gtruth)
+            if sr_mask is not None:
+                mb = scores.size(0) // sr_mask.size(1)
+                srm = sr_mask.expand(mb, *sr_mask.size()).contiguous().view(*scores.size())
+                scores_ = scores.masked_fill(srm, 0)
+            else:
+                scores_ = scores
+            loss = self.criterion(scores_, gtruth)
         stats = self._stats(loss.clone(), scores, gtruth)
 
         return loss, stats
